@@ -1,11 +1,13 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { exec } from "child_process";
 import { promisify } from "util";
 import * as path from "path";
-import * as dotenv from 'dotenv';
-import * as os from 'os';
+import * as fs from "fs/promises";
+import * as os from "os";
+import * as dotenv from "dotenv"
+
 dotenv.config();
 
 const execAsync = promisify(exec);
@@ -14,38 +16,69 @@ const server = new McpServer({
   name: "Foundry MCP Server",
   version: "0.1.0"
 }, {
-  instructions: "This server provides tools for Solidity developers using the Foundry toolkit (anvil, forge, cast, and chisel)."
+  instructions: `
+This server provides tools for Solidity developers using the Foundry toolkit:
+- forge: Smart contract development framework
+- cast: Ethereum RPC client and utility tool
+- anvil: Local Ethereum test node
+
+You can interact with local or remote Ethereum nodes, deploy contracts, perform common operations, and analyze smart contract code.
+  `
 });
 
-// Paths to Foundry executables
-const FOUNDRY_BIN = os.homedir() + "/.foundry/bin";
-console.log(FOUNDRY_BIN)
-const castPath = path.join(FOUNDRY_BIN, "cast");
-const forgePath =  path.join(FOUNDRY_BIN, "forge");
-const chiselPath =   path.join(FOUNDRY_BIN, "chisel");
-const anvilPath = path.join(FOUNDRY_BIN, "anvil");
-const mescPath =  path.join(os.homedir(), "mesc");  
+ const FOUNDRY_WORKSPACE = path.join(os.homedir(), '.mcp-foundry-workspace');
 
-// Default RPC URL (can be overridden)
-const DEFAULT_RPC_URL = process.env.ETH_RPC_URL || "http://localhost:8545";
+ async function ensureWorkspaceInitialized() {
+  try {
+     await fs.mkdir(FOUNDRY_WORKSPACE, { recursive: true });
+    
+     const isForgeProject = await fs.access(path.join(FOUNDRY_WORKSPACE, 'foundry.toml'))
+      .then(() => true)
+      .catch(() => false);
+    
+    if (!isForgeProject) {
+       await executeCommand(`cd ${FOUNDRY_WORKSPACE} && ${forgePath} init --no-git`);
+    }
+    
+    return FOUNDRY_WORKSPACE;
+  } catch (error) {
+    console.error("Error initializing workspace:", error);
+    throw error;
+  }
+}
 
-// Error messages
+const getBinaryPaths = () => {
+  const homeDir = os.homedir();
+
+   const FOUNDRY_BIN = path.join(homeDir, '.foundry', 'bin');
+  
+  return {
+    castPath: path.join(FOUNDRY_BIN, "cast"),
+    forgePath: path.join(FOUNDRY_BIN, "forge"),
+    anvilPath: path.join(FOUNDRY_BIN, "anvil"),
+    homeDir
+  };
+};
+
+const { castPath, forgePath, anvilPath, homeDir } = getBinaryPaths();
+
+const DEFAULT_RPC_URL = process.env.RPC_URL || "http://localhost:8545";
+
 const FOUNDRY_NOT_INSTALLED_ERROR = "Foundry tools are not installed. Please install Foundry: https://book.getfoundry.sh/getting-started/installation";
-const ANVIL_NOT_RUNNING_ERROR = "Anvil instance not running. Please start anvil using the 'anvil_start' tool first.";
 
-// Check if Foundry tools are installed
+ 
 async function checkFoundryInstalled() {
   try {
     await execAsync(`${forgePath} --version`);
     return true;
   } catch (error) {
-    console.error("checkFoundryInstalled error:", error);
+    console.error("Foundry tools check failed:", error);
     return false;
   }
 }
 
-// Execute a command and return result
-async function executeCommand(command: string) {
+ 
+async function executeCommand(command) {
   try {
     const { stdout, stderr } = await execAsync(command);
     if (stderr && !stdout) {
@@ -57,26 +90,114 @@ async function executeCommand(command: string) {
     return { success: false, message: errorMessage };
   }
 }
-
-// TODO: Change it to be a tool
-async function resolveRpcUrl(rpcUrl: string | undefined) {
-  if (!rpcUrl || rpcUrl.startsWith("mesc:")) {
+ 
+async function resolveRpcUrl(rpcUrl) {
+  if (!rpcUrl) {
+    return DEFAULT_RPC_URL;
+  }
+  
+  // Handle alias lookup in foundry config
+  if (!rpcUrl.startsWith('http')) {
     try {
-      // If rpcUrl starts with mesc:, use that as the endpoint name, otherwise use default endpoint
-      const endpointName = rpcUrl ? rpcUrl.substring(5) : "";
-      const args = endpointName ? ["url", endpointName] : ["url"];
-      const { stdout } = await execAsync(`${mescPath} ${args.join(" ")}`);
-      return stdout.trim();
+      // Try to find the RPC endpoint in foundry config
+      const configPath = path.join(homeDir, '.foundry', 'config.toml');
+      const configExists = await fs.access(configPath).then(() => true).catch(() => false);
+      
+      if (configExists) {
+        const configContent = await fs.readFile(configPath, 'utf8');
+        const rpcMatch = new RegExp(`\\[rpc_endpoints\\][\\s\\S]*?${rpcUrl}\\s*=\\s*["']([^"']+)["']`).exec(configContent);
+        
+        if (rpcMatch && rpcMatch[1]) {
+          return rpcMatch[1];
+        }
+      }
     } catch (error) {
-      // If mesc is not available or no endpoint found, fall back to default
-      console.error("Error resolving MESC URL:", error);
-      return rpcUrl || DEFAULT_RPC_URL;
+      console.error("Error resolving RPC from config:", error);
     }
   }
-  return rpcUrl || DEFAULT_RPC_URL;
+  
+  return rpcUrl;
 }
 
+
+async function getAnvilInfo() {
+  try {
+    const { stdout } = await execAsync('ps aux | grep anvil | grep -v grep');
+    if (!stdout) {
+      return { running: false };
+    }
+    
+    const portMatch = stdout.match(/--port\s+(\d+)/);
+    const port = portMatch ? portMatch[1] : '8545';
+    
+    return {
+      running: true,
+      port,
+      url: `http://localhost:${port}`
+    };
+  } catch (error) {
+    return { running: false };
+  }
+}
+
+//===================================================================================================
+// RESOURCES
+//===================================================================================================
+
+// Resource: Anvil status
+server.resource(
+  "anvil_status",
+  "anvil://status",
+  async (uri) => {
+    const info = await getAnvilInfo();
+    return {
+      contents: [{
+        uri: uri.href,
+        text: JSON.stringify(info, null, 2)
+      }]
+    };
+  }
+)
  
+// Resource: Contract source from Etherscan
+server.resource(
+  "contract_source",
+  new ResourceTemplate("contract://{address}/source", { list: undefined }),
+  async (uri, { address }) => {
+    try {
+      const command = `${castPath} etherscan-source ${address}`;
+      const { success, message } = await executeCommand(command);
+      
+      if (success) {
+        return {
+          contents: [{
+            uri: uri.href,
+            text: message
+          }]
+        };
+      } else {
+        return {
+          contents: [{
+            uri: uri.href,
+            text: JSON.stringify({ error: "Could not retrieve contract source", details: message })
+          }]
+        };
+      }
+    } catch (error) {
+      return {
+        contents: [{
+          uri: uri.href,
+          text: JSON.stringify({ error: "Failed to retrieve contract source" })
+        }]
+      };
+    }
+  }
+);
+
+//===================================================================================================
+// CAST TOOLS
+//===================================================================================================
+
 // Tool: Call a contract function (read-only)
 server.tool(
   "cast_call",
@@ -168,7 +289,8 @@ server.tool(
     }
 
     const resolvedRpcUrl = await resolveRpcUrl(rpcUrl);
-    let command = `${castPath} send ${contractAddress} "${functionSignature}"`;
+    const privateKey = process.env.PRIVATE_KEY;
+    let command = `${castPath} send ${contractAddress} "${functionSignature}" --private-key ${[privateKey]}`;
     
     if (args.length > 0) {
       command += " " + args.join(" ");
@@ -309,146 +431,6 @@ server.tool(
   }
 );
 
-// Tool: Encode function data
-server.tool(
-  "cast_abi_encode",
-  "Encode function arguments according to the ABI",
-  {
-    signature: z.string().describe("Function signature (e.g., 'transfer(address,uint256)')"),
-    args: z.array(z.string()).optional().describe("Function arguments")
-  },
-  async ({ signature, args = [] }) => {
-    const installed = await checkFoundryInstalled();
-    if (!installed) {
-      return {
-        content: [{ type: "text", text: FOUNDRY_NOT_INSTALLED_ERROR }],
-        isError: true
-      };
-    }
-
-    let command = `${castPath} abi-encode "${signature}"`;
-    
-    if (args.length > 0) {
-      command += " " + args.join(" ");
-    }
-    
-    const result = await executeCommand(command);
-    
-    return {
-      content: [{ 
-        type: "text", 
-        text: result.success 
-          ? `ABI encoded data: ${result.message.trim()}` 
-          : `Encoding failed: ${result.message}` 
-      }],
-      isError: !result.success
-    };
-  }
-);
-
-// Tool: Decode ABI-encoded data
-server.tool(
-  "cast_abi_decode",
-  "Decode ABI-encoded data",
-  {
-    data: z.string().describe("ABI-encoded data"),
-    types: z.array(z.string()).describe("Output types (e.g., 'address uint256')")
-  },
-  async ({ data, types }) => {
-    const installed = await checkFoundryInstalled();
-    if (!installed) {
-      return {
-        content: [{ type: "text", text: FOUNDRY_NOT_INSTALLED_ERROR }],
-        isError: true
-      };
-    }
-
-    const command = `${castPath} abi-decode "${data}" "${types.join(' ')}"`;
-    
-    const result = await executeCommand(command);
-    
-    return {
-      content: [{ 
-        type: "text", 
-        text: result.success 
-          ? `Decoded data: ${result.message.trim()}` 
-          : `Decoding failed: ${result.message}` 
-      }],
-      isError: !result.success
-    };
-  }
-);
-
-// Tool: Get contract ABI
-server.tool(
-  "cast_4byte",
-  "Lookup and decode function selector or event signatures",
-  {
-    selector: z.string().describe("Function selector (0x + 4 bytes) or event topic (0x + 32 bytes)"),
-  },
-  async ({ selector }) => {
-    const installed = await checkFoundryInstalled();
-    if (!installed) {
-      return {
-        content: [{ type: "text", text: FOUNDRY_NOT_INSTALLED_ERROR }],
-        isError: true
-      };
-    }
-
-    const command = `${castPath} 4byte ${selector}`;
-    
-    const result = await executeCommand(command);
-    
-    return {
-      content: [{ 
-        type: "text", 
-        text: result.success 
-          ? `Signature lookup for ${selector}:\n${result.message.trim()}` 
-          : `Signature lookup failed: ${result.message}` 
-      }],
-      isError: !result.success
-    };
-  }
-);
-
-// Tool: Compute the storage slot for a mapping
-server.tool(
-  "cast_compute_slot",
-  "Compute the storage slot for a mapping with given key",
-  {
-    slot: z.string().describe("Storage slot of the mapping"),
-    key: z.string().describe("Key in the mapping"),
-    keyType: z.string().optional().describe("The key type (default: address)")
-  },
-  async ({ slot, key, keyType = "address" }) => {
-    const installed = await checkFoundryInstalled();
-    if (!installed) {
-      return {
-        content: [{ type: "text", text: FOUNDRY_NOT_INSTALLED_ERROR }],
-        isError: true
-      };
-    }
-
-    let command = `${castPath} compute-slot ${slot} ${key}`;
-    
-    if (keyType) {
-      command += ` ${keyType}`;
-    }
-    
-    const result = await executeCommand(command);
-    
-    return {
-      content: [{ 
-        type: "text", 
-        text: result.success 
-          ? `Storage slot for mapping[${key}] at slot ${slot} (key type: ${keyType}):\n${result.message.trim()}` 
-          : `Computation failed: ${result.message}` 
-      }],
-      isError: !result.success
-    };
-  }
-);
-
 // Tool: Read a contract's storage at a given slot
 server.tool(
   "cast_storage",
@@ -493,16 +475,18 @@ server.tool(
   }
 );
 
-// Tool: Decode transaction data
+// Tool: Run a published transaction in a local environment and print the trace
 server.tool(
-  "cast_tx",
-  "Get information about a transaction",
+  "cast_run",
+  "Runs a published transaction in a local environment and prints the trace",
   {
-    txHash: z.string().describe("Transaction hash"),
-    rpcUrl: z.string().optional().describe("JSON-RPC URL (default: http://localhost:8545)"),
-    field: z.string().optional().describe("Specific transaction field to extract"),
+    txHash: z.string().describe("Transaction hash to replay"),
+    rpcUrl: z.string().describe("JSON-RPC URL"),
+    quick: z.boolean().optional().describe("Execute the transaction only with the state from the previous block"),
+    debug: z.boolean().optional().describe("Open the transaction in the debugger"),
+    labels: z.array(z.string()).optional().describe("Label addresses in the trace (format: <address>:<label>)")
   },
-  async ({ txHash, rpcUrl, field }) => {
+  async ({ txHash, rpcUrl, quick = false, debug = false, labels = [] }) => {
     const installed = await checkFoundryInstalled();
     if (!installed) {
       return {
@@ -512,14 +496,23 @@ server.tool(
     }
 
     const resolvedRpcUrl = await resolveRpcUrl(rpcUrl);
-    let command = `${castPath} tx ${txHash}`;
+    let command = `${castPath} run ${txHash}`;
     
     if (resolvedRpcUrl) {
       command += ` --rpc-url "${resolvedRpcUrl}"`;
     }
     
-    if (field) {
-      command += ` ${field}`;
+    if (quick) {
+      command += " --quick";
+    }
+    
+    if (debug) {
+      command += " --debug";
+    }
+    
+    // Add labels if provided
+    for (const label of labels) {
+      command += ` --label ${label}`;
     }
     
     const result = await executeCommand(command);
@@ -528,23 +521,27 @@ server.tool(
       content: [{ 
         type: "text", 
         text: result.success 
-          ? `Transaction ${txHash}${field ? ` (${field})` : ""}:\n${result.message}` 
-          : `Failed to get transaction: ${result.message}` 
+          ? `Transaction trace for ${txHash}:\n${result.message}` 
+          : `Failed to run transaction: ${result.message}` 
       }],
       isError: !result.success
     };
   }
 );
 
-// Tool: Decode calldata
+// Tool: Get logs by signature or topic
 server.tool(
-  "cast_calldata",
-  "Parse calldata and decode it according to the given signature",
+  "cast_logs",
+  "Get logs by signature or topic",
   {
-    calldata: z.string().describe("The calldata to parse"),
-    signature: z.string().optional().describe("The function signature (e.g., 'transfer(address,uint256)')")
+    signature: z.string().describe("Event signature (e.g., 'Transfer(address,address,uint256)') or topic 0 hash"),
+    topics: z.array(z.string()).optional().describe("Additional topics (up to 3)"),
+    address: z.string().optional().describe("Contract address to filter logs from"),
+    fromBlock: z.string().optional().describe("Starting block number/tag"),
+    toBlock: z.string().optional().describe("Ending block number/tag"),
+    rpcUrl: z.string().optional().describe("JSON-RPC URL (default: http://localhost:8545)")
   },
-  async ({ calldata, signature }) => {
+  async ({ signature, topics = [], address, fromBlock, toBlock, rpcUrl }) => {
     const installed = await checkFoundryInstalled();
     if (!installed) {
       return {
@@ -553,12 +550,27 @@ server.tool(
       };
     }
 
-    let command = `${castPath} calldata`;
+    const resolvedRpcUrl = await resolveRpcUrl(rpcUrl);
+    let command = `${castPath} logs "${signature}"`;
     
-    if (signature) {
-      command += ` "${signature}" ${calldata}`;
-    } else {
-      command += ` ${calldata}`;
+    if (topics.length > 0) {
+      command += " " + topics.join(" ");
+    }
+    
+    if (address) {
+      command += ` --address ${address}`;
+    }
+    
+    if (fromBlock) {
+      command += ` --from-block ${fromBlock}`;
+    }
+    
+    if (toBlock) {
+      command += ` --to-block ${toBlock}`;
+    }
+    
+    if (resolvedRpcUrl) {
+      command += ` --rpc-url "${resolvedRpcUrl}"`;
     }
     
     const result = await executeCommand(command);
@@ -567,27 +579,317 @@ server.tool(
       content: [{ 
         type: "text", 
         text: result.success 
-          ? `Decoded calldata${signature ? ` for ${signature}` : ""}:\n${result.message}` 
-          : `Failed to decode calldata: ${result.message}` 
+          ? `Logs for signature "${signature}":\n${result.message}` 
+          : `Failed to get logs: ${result.message}` 
       }],
       isError: !result.success
     };
   }
 );
 
-// Tool: Run a published transaction in a local environment and print the trace
+// Tool: Lookup function or event signatures
 server.tool(
-  "cast_run",
-  "Runs a published transaction in a local environment and prints the trace",
+  "cast_sig",
+  "Get the selector for a function or event signature",
   {
-    txHash: z.string().describe("Transaction hash to replay"),
-    rpcUrl: z.string().describe("JSON-RPC URL"),
-    quick: z.boolean().optional().describe("Execute the transaction only with the state from the previous block"),
-    verbosity: z.string().optional().describe("Trace verbosity level. (eg: vv for basic and vvvvv for max)"),
-    debug: z.boolean().optional().describe("Open the transaction in the debugger"),
-    labels: z.array(z.string()).optional().describe("Label addresses in the trace (format: <address>:<label>)")
+    signature: z.string().describe("Function or event signature"),
+    isEvent: z.boolean().optional().describe("Whether the signature is for an event (default: false)")
   },
-  async ({ txHash, rpcUrl, quick = false, verbosity = "vvv", debug = false, labels = [] }) => {
+  async ({ signature, isEvent = false }) => {
+    const installed = await checkFoundryInstalled();
+    if (!installed) {
+      return {
+        content: [{ type: "text", text: FOUNDRY_NOT_INSTALLED_ERROR }],
+        isError: true
+      };
+    }
+
+    const command = isEvent 
+      ? `${castPath} sig-event "${signature}"` 
+      : `${castPath} sig "${signature}"`;
+    
+    const result = await executeCommand(command);
+    
+    return {
+      content: [{ 
+        type: "text", 
+        text: result.success 
+          ? `Selector for ${isEvent ? "event" : "function"} "${signature}": ${result.message.trim()}` 
+          : `Selector generation failed: ${result.message}` 
+      }],
+      isError: !result.success
+    };
+  }
+);
+
+// Tool: Get event or function signature using 4byte directory
+server.tool(
+  "cast_4byte",
+  "Lookup function or event signature from the 4byte directory",
+  {
+    selector: z.string().describe("Function selector (0x + 4 bytes) or event topic (0x + 32 bytes)"),
+    isEvent: z.boolean().optional().describe("Whether to lookup an event (default: false)")
+  },
+  async ({ selector, isEvent = false }) => {
+    const installed = await checkFoundryInstalled();
+    if (!installed) {
+      return {
+        content: [{ type: "text", text: FOUNDRY_NOT_INSTALLED_ERROR }],
+        isError: true
+      };
+    }
+
+    const command = isEvent 
+      ? `${castPath} 4byte-event ${selector}` 
+      : `${castPath} 4byte ${selector}`;
+    
+    const result = await executeCommand(command);
+    
+    return {
+      content: [{ 
+        type: "text", 
+        text: result.success 
+          ? `Possible ${isEvent ? "event" : "function"} signatures for ${selector}:\n${result.message}` 
+          : `Lookup failed: ${result.message}` 
+      }],
+      isError: !result.success
+    };
+  }
+);
+
+// Tool: Get chain information
+server.tool(
+  "cast_chain",
+  "Get information about the current chain",
+  {
+    rpcUrl: z.string().optional().describe("JSON-RPC URL (default: http://localhost:8545)"),
+    returnId: z.boolean().optional().describe("Return the chain ID instead of the name (default: false)")
+  },
+  async ({ rpcUrl, returnId = false }) => {
+    const installed = await checkFoundryInstalled();
+    if (!installed) {
+      return {
+        content: [{ type: "text", text: FOUNDRY_NOT_INSTALLED_ERROR }],
+        isError: true
+      };
+    }
+
+    const resolvedRpcUrl = await resolveRpcUrl(rpcUrl);
+    const command = returnId 
+      ? `${castPath} chain-id --rpc-url "${resolvedRpcUrl}"` 
+      : `${castPath} chain --rpc-url "${resolvedRpcUrl}"`;
+    
+    const result = await executeCommand(command);
+    
+    return {
+      content: [{ 
+        type: "text", 
+        text: result.success 
+          ? `Chain ${returnId ? "ID" : "name"}: ${result.message.trim()}` 
+          : `Failed to get chain information: ${result.message}` 
+      }],
+      isError: !result.success
+    };
+  }
+);
+
+//===================================================================================================
+// ANVIL TOOLS
+//===================================================================================================
+
+// Tool: Start a new Anvil instance
+server.tool(
+  "anvil_start",
+  "Start a new Anvil instance (local Ethereum node)",
+  {
+    port: z.number().optional().describe("Port to listen on (default: 8545)"),
+    blockTime: z.number().optional().describe("Block time in seconds (default: 0 - mine on demand)"),
+    forkUrl: z.string().optional().describe("URL of the JSON-RPC endpoint to fork from"),
+    forkBlockNumber: z.number().optional().describe("Block number to fork from"),
+    accounts: z.number().optional().describe("Number of accounts to generate (default: 10)"),
+    mnemonic: z.string().optional().describe("BIP39 mnemonic phrase to generate accounts from"),
+    silent: z.boolean().optional().describe("Suppress anvil output (default: false)")
+  },
+  async ({ port = 8545, blockTime, forkUrl, forkBlockNumber, accounts, mnemonic, silent = false }) => {
+    const installed = await checkFoundryInstalled();
+    if (!installed) {
+      return {
+        content: [{ type: "text", text: FOUNDRY_NOT_INSTALLED_ERROR }],
+        isError: true
+      };
+    }
+
+    // Check if anvil is already running
+    const anvilInfo = await getAnvilInfo();
+    if (anvilInfo.running) {
+      return {
+        content: [{ 
+          type: "text", 
+          text: `Anvil is already running on port ${anvilInfo.port}.`
+        }],
+        isError: true
+      };
+    }
+
+    let command = `${anvilPath} --port ${port}`;
+    
+    if (blockTime !== undefined) {
+      command += ` --block-time ${blockTime}`;
+    }
+    
+    if (forkUrl) {
+      command += ` --fork-url "${forkUrl}"`;
+      
+      if (forkBlockNumber !== undefined) {
+        command += ` --fork-block-number ${forkBlockNumber}`;
+      }
+    }
+    
+    if (accounts !== undefined) {
+      command += ` --accounts ${accounts}`;
+    }
+    
+    if (mnemonic) {
+      command += ` --mnemonic "${mnemonic}"`;
+    }
+    
+    try {
+      // Start anvil in the background
+      const child = exec(command, (error, stdout, stderr) => {
+        if (error && !silent) {
+          console.error(`Anvil error: ${error.message}`);
+        }
+        if (stderr && !silent) {
+          console.error(`Anvil stderr: ${stderr}`);
+        }
+        if (stdout && !silent) {
+          console.log(`Anvil stdout: ${stdout}`);
+        }
+      });
+      
+      // Give it a moment to start
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Check if it started successfully
+      const newAnvilInfo = await getAnvilInfo();
+      if (newAnvilInfo.running) {
+        return {
+          content: [{ 
+            type: "text", 
+            text: `Anvil started successfully on port ${port}. ` +
+                  `RPC URL: http://localhost:${port}\n` +
+                  `Process ID: ${child.pid}`
+          }]
+        };
+      } else {
+        return {
+          content: [{ 
+            type: "text", 
+            text: `Failed to start Anvil. Check system logs for details.`
+          }],
+          isError: true
+        };
+      }
+    } catch (error) {
+      return {
+        content: [{ 
+          type: "text", 
+          text: `Error starting Anvil: ${error instanceof Error ? error.message : String(error)}`
+        }],
+        isError: true
+      };
+    }
+  }
+);
+
+// Tool: Stop an Anvil instance
+server.tool(
+  "anvil_stop",
+  "Stop a running Anvil instance",
+  {},
+  async () => {
+    const anvilInfo = await getAnvilInfo();
+    if (!anvilInfo.running) {
+      return {
+        content: [{ 
+          type: "text", 
+          text: "No Anvil instance is currently running."
+        }],
+        isError: true
+      };
+    }
+
+    try {
+      // Kill the anvil process
+      if (os.platform() === 'win32') {
+        await execAsync('taskkill /F /IM anvil.exe');
+      } else {
+        await execAsync('pkill -f anvil');
+      }
+      
+      // Check if it was stopped successfully
+      await new Promise(resolve => setTimeout(resolve, 500));
+      const newAnvilInfo = await getAnvilInfo();
+      
+      if (!newAnvilInfo.running) {
+        return {
+          content: [{ 
+            type: "text", 
+            text: "Anvil has been stopped successfully."
+          }]
+        };
+      } else {
+        return {
+          content: [{ 
+            type: "text", 
+            text: "Failed to stop Anvil. It may still be running."
+          }],
+          isError: true
+        };
+      }
+    } catch (error) {
+      return {
+        content: [{ 
+          type: "text", 
+          text: `Error stopping Anvil: ${error instanceof Error ? error.message : String(error)}`
+        }],
+        isError: true
+      };
+    }
+  }
+);
+
+// Tool: Get current Anvil status
+server.tool(
+  "anvil_status",
+  "Check if Anvil is running and get its status",
+  {},
+  async () => {
+    const anvilInfo = await getAnvilInfo();
+    
+    return {
+      content: [{ 
+        type: "text", 
+        text: anvilInfo.running
+          ? `Anvil is running on port ${anvilInfo.port}. RPC URL: ${anvilInfo.url}`
+          : "Anvil is not currently running."
+      }]
+    };
+  }
+);
+
+// Tool: Run Forge scripts
+server.tool(
+  "forge_script",
+  "Run a Forge script from the workspace",
+  {
+    scriptPath: z.string().describe("Path to the script file (e.g., 'script/Deploy.s.sol')"),
+    sig: z.string().optional().describe("Function signature to call (default: 'run()')"),
+    rpcUrl: z.string().optional().describe("JSON-RPC URL (default: http://localhost:8545)"),
+    broadcast: z.boolean().optional().describe("Broadcast the transactions"),
+    verify: z.boolean().optional().describe("Verify the contract on Etherscan (needs API key)")
+  },
+  async ({ scriptPath, sig = "run()", rpcUrl, broadcast = false, verify = false }) => {
     const installed = await checkFoundryInstalled();
     if (!installed) {
       return {
@@ -597,28 +899,34 @@ server.tool(
     }
 
     try {
+      const workspace = await ensureWorkspaceInitialized();
+      
+      // Check if script exists
+      const scriptFullPath = path.join(workspace, scriptPath);
+      const scriptExists = await fs.access(scriptFullPath).then(() => true).catch(() => false);
+      if (!scriptExists) {
+        return {
+          content: [{ 
+            type: "text", 
+            text: `Script does not exist at ${scriptFullPath}` 
+          }],
+          isError: true
+        };
+      }
+
       const resolvedRpcUrl = await resolveRpcUrl(rpcUrl);
-      let command = `${castPath} run ${txHash}`;
+      let command = `cd ${workspace} && ${forgePath} script ${scriptPath} --sig "${sig}"`;
       
       if (resolvedRpcUrl) {
         command += ` --rpc-url "${resolvedRpcUrl}"`;
       }
       
-      if (quick) {
-        command += " --quick";
+      if (broadcast) {
+        command += ` --broadcast`;
       }
       
-      if (verbosity) {
-        command +=  ` -${verbosity}`;
-      }
-      
-      if (debug) {
-        command += " --debug";
-      }
-      
-      // Add labels if provided
-      for (const label of labels) {
-        command += ` --label ${label}`;
+      if (verify) {
+        command += ` --verify`;
       }
       
       const result = await executeCommand(command);
@@ -627,36 +935,100 @@ server.tool(
         content: [{ 
           type: "text", 
           text: result.success 
-            ? `Transaction trace for ${txHash}:\n${result.message}` 
-            : `Failed to run transaction: ${result.message}` 
+            ? `Script executed successfully:\n${result.message}` 
+            : `Script execution failed: ${result.message}` 
         }],
         isError: !result.success
       };
     } catch (error) {
       return {
-        content: [{ type: "text", text: `Error running transaction: ${error}` }],
+        content: [{ 
+          type: "text", 
+          text: `Error executing script: ${error instanceof Error ? error.message : String(error)}` 
+        }],
         isError: true
       };
     }
   }
 );
+ 
 
-// Tool: Generate transaction to call a function
+//===================================================================================================
+// UTILITY TOOLS
+//===================================================================================================
+
+// Tool: Convert between units (wei, gwei, ether)
 server.tool(
-  "cast_send_tx",
-  "Generate and optionally broadcast a transaction",
+  "convert_eth_units",
+  "Convert between Ethereum units (wei, gwei, ether)",
   {
-    to: z.string().describe("Recipient address"),
-    data: z.string().optional().describe("Calldata (hex string)"),
-    value: z.string().optional().describe("Ether value in wei"),
-    from: z.string().optional().describe("Sender address or private key"),
-    rpcUrl: z.string().optional().describe("JSON-RPC URL (default: http://localhost:8545)"),
-    nonce: z.number().optional().describe("Nonce for the transaction"),
-    gasLimit: z.string().optional().describe("Gas limit for the transaction"),
-    gasPrice: z.string().optional().describe("Gas price in wei"),
-    broadcast: z.boolean().optional().describe("Broadcast the transaction")
+    value: z.string().describe("Value to convert"),
+    fromUnit: z.enum(["wei", "gwei", "ether"]).describe("Source unit"),
+    toUnit: z.enum(["wei", "gwei", "ether"]).describe("Target unit")
   },
-  async ({ to, data, value, from, rpcUrl, nonce, gasLimit, gasPrice, broadcast = false }) => {
+  async ({ value, fromUnit, toUnit }) => {
+    const installed = await checkFoundryInstalled();
+    if (!installed) {
+      return {
+        content: [{ type: "text", text: FOUNDRY_NOT_INSTALLED_ERROR }],
+        isError: true
+      };
+    }
+
+    const command = `${castPath} to-unit ${value}${fromUnit} ${toUnit}`;
+    const result = await executeCommand(command);
+    
+    return {
+      content: [{ 
+        type: "text", 
+        text: result.success 
+          ? `${value} ${fromUnit} = ${result.message.trim()} ${toUnit}` 
+          : `Conversion failed: ${result.message}` 
+      }],
+      isError: !result.success
+    };
+  }
+);
+
+// Tool: Generate a new wallet
+server.tool(
+  "generate_wallet",
+  "Generate a new Ethereum wallet (private key and address)",
+  {},
+  async () => {
+    const installed = await checkFoundryInstalled();
+    if (!installed) {
+      return {
+        content: [{ type: "text", text: FOUNDRY_NOT_INSTALLED_ERROR }],
+        isError: true
+      };
+    }
+
+    const command = `${castPath} wallet new`;
+    const result = await executeCommand(command);
+    
+    return {
+      content: [{ 
+        type: "text", 
+        text: result.success 
+          ? `New wallet generated:\n${result.message}` 
+          : `Failed to generate wallet: ${result.message}` 
+      }],
+      isError: !result.success
+    };
+  }
+);
+
+// Tool: Calculate contract address
+server.tool(
+  "compute_address",
+  "Compute the address of a contract that would be deployed by a specific address",
+  {
+    deployerAddress: z.string().describe("Address of the deployer"),
+    nonce: z.string().optional().describe("Nonce of the transaction (default: current nonce)"),
+    rpcUrl: z.string().optional().describe("JSON-RPC URL (default: http://localhost:8545)")
+  },
+  async ({ deployerAddress, nonce, rpcUrl }) => {
     const installed = await checkFoundryInstalled();
     if (!installed) {
       return {
@@ -666,36 +1038,14 @@ server.tool(
     }
 
     const resolvedRpcUrl = await resolveRpcUrl(rpcUrl);
-    let command = broadcast ? `${castPath} send` : `${castPath} tx-create`;
+    let command = `${castPath} compute-address ${deployerAddress}`;
     
-    command += ` ${to}`;
-    
-    if (data) {
-      command += ` ${data}`;
-    }
-    
-    if (value) {
-      command += ` --value ${value}`;
-    }
-    
-    if (from) {
-      command += ` --from ${from}`;
-    }
-    
-    if (resolvedRpcUrl) {
-      command += ` --rpc-url "${resolvedRpcUrl}"`;
-    }
-    
-    if (nonce !== undefined) {
+    if (nonce) {
       command += ` --nonce ${nonce}`;
     }
     
-    if (gasLimit) {
-      command += ` --gas-limit ${gasLimit}`;
-    }
-    
-    if (gasPrice) {
-      command += ` --gas-price ${gasPrice}`;
+    if (resolvedRpcUrl) {
+      command += ` --rpc-url "${resolvedRpcUrl}"`;
     }
     
     const result = await executeCommand(command);
@@ -704,24 +1054,23 @@ server.tool(
       content: [{ 
         type: "text", 
         text: result.success 
-          ? `${broadcast ? "Transaction sent" : "Transaction created"}:\n${result.message}` 
-          : `${broadcast ? "Transaction failed" : "Transaction creation failed"}: ${result.message}` 
+          ? `Computed contract address:\n${result.message}` 
+          : `Address computation failed: ${result.message}` 
       }],
       isError: !result.success
     };
   }
 );
 
-// Tool: Get block information
+// Tool: Get contract bytecode size
 server.tool(
-  "cast_block",
-  "Get information about a block",
+  "contract_size",
+  "Get the bytecode size of a deployed contract",
   {
-    blockNumber: z.string().describe("Block number or hash (can use 'latest', 'earliest', etc.)"),
-    rpcUrl: z.string().optional().describe("JSON-RPC URL (default: http://localhost:8545)"),
-    field: z.string().optional().describe("Specific block field to extract"),
+    address: z.string().describe("Contract address"),
+    rpcUrl: z.string().optional().describe("JSON-RPC URL (default: http://localhost:8545)")
   },
-  async ({ blockNumber, rpcUrl, field }) => {
+  async ({ address, rpcUrl }) => {
     const installed = await checkFoundryInstalled();
     if (!installed) {
       return {
@@ -731,35 +1080,314 @@ server.tool(
     }
 
     const resolvedRpcUrl = await resolveRpcUrl(rpcUrl);
-    let command = `${castPath} block ${blockNumber}`;
+    let command = `${castPath} codesize ${address}`;
     
     if (resolvedRpcUrl) {
       command += ` --rpc-url "${resolvedRpcUrl}"`;
     }
     
-    if (field) {
-      command += ` ${field}`;
-    }
-    
     const result = await executeCommand(command);
+    
+    const bytes = parseInt(result.message);
+    let sizeInfo = "";
+    if (!isNaN(bytes)) {
+      const kilobytes = bytes / 1024;
+      const contractLimit = 24576; // 24KB limit for contracts
+      const percentOfLimit = (bytes / contractLimit) * 100;
+      
+      sizeInfo = `\n\n${bytes} bytes (${kilobytes.toFixed(2)} KB)\n` +
+                 `EVM Contract Size Limit: 24KB (24576 bytes)\n` +
+                 `Current size is ${percentOfLimit.toFixed(2)}% of the maximum`;
+    }
     
     return {
       content: [{ 
         type: "text", 
         text: result.success 
-          ? `Block ${blockNumber}${field ? ` (${field})` : ""}:\n${result.message}` 
-          : `Failed to get block info: ${result.message}` 
+          ? `Contract bytecode size for ${address}:${sizeInfo}` 
+          : `Failed to get contract size: ${result.message}` 
       }],
       isError: !result.success
     };
   }
 );
 
+// server.tool(
+//   "estimate_gas",
+//   "Estimate the gas cost of a transaction",
+//   {
+//     to: z.string().describe("Recipient address"),
+//     functionSignature: z.string().describe("Function signature (e.g., 'transfer(address,uint256)')"),
+//     args: z.array(z.string()).optional().describe("Function arguments"),
+//     value: z.string().optional().describe("Ether value to send with the transaction (in wei)"),
+//     rpcUrl: z.string().optional().describe("JSON-RPC URL (default: http://localhost:8545)")
+//   },
+//   async ({ to, functionSignature, args = [], value, rpcUrl }) => {
+//     const installed = await checkFoundryInstalled();
+//     if (!installed) {
+//       return {
+//         content: [{ type: "text", text: FOUNDRY_NOT_INSTALLED_ERROR }],
+//         isError: true
+//       };
+//     }
+
+//     const resolvedRpcUrl = await resolveRpcUrl(rpcUrl);
+//     let command = `${castPath} estimate ${to} "${functionSignature}"`;
+    
+//     if (args.length > 0) {
+//       command += " " + args.join(" ");
+//     }
+    
+//     if (value) {
+//       command += ` --value ${value}`;
+//     }
+    
+//     if (resolvedRpcUrl) {
+//       command += ` --rpc-url "${resolvedRpcUrl}"`;
+//     }
+    
+//     const result = await executeCommand(command);
+//     const gasEstimate = result.message.trim();
+    
+//     // Get current gas price to calculate cost in ETH
+//     let gasPriceInfo = "";
+//     try {
+//       const gasPriceCommand = `${castPath} gas-price --rpc-url "${resolvedRpcUrl}"`;
+//       const gasPriceResult = await executeCommand(gasPriceCommand);
+//       if (gasPriceResult.success) {
+//         const gasPrice = gasPriceResult.message.trim();
+//         const cost = BigInt(gasEstimate) * BigInt(gasPrice);
+        
+//         // Convert wei to ETH
+//         const ethCommand = `${castPath} from-wei ${cost}`;
+//         const ethResult = await executeCommand(ethCommand);
+//         if (ethResult.success) {
+//           gasPriceInfo = `\nGas Price: ${gasPrice} wei\nEstimated Cost: ${ethResult.message.trim()} ETH`;
+//         }
+//       }
+//     } catch (error) {
+//       console.error("Error getting gas price:", error);
+//     }
+    
+//     return {
+//       content: [{ 
+//         type: "text", 
+//         text: result.success 
+//           ? `Estimated gas for calling ${functionSignature} on ${to}: ${gasEstimate} gas units${gasPriceInfo}` 
+//           : `Gas estimation failed: ${result.message}` 
+//       }],
+//       isError: !result.success
+//     };
+//   }
+// );
+
+// Tool: Create or update a Solidity file (contract, script, etc.)
+server.tool(
+  "create_solidity_file",
+  "Create or update a Solidity file in the workspace",
+  {
+    filePath: z.string().describe("Path to the file (e.g., 'src/MyContract.sol' or 'script/Deploy.s.sol')"),
+    content: z.string().describe("File content"),
+    overwrite: z.boolean().optional().describe("Overwrite existing file (default: false)")
+  },
+  async ({ filePath, content, overwrite = false }) => {
+    try {
+      const workspace = await ensureWorkspaceInitialized();
+      const fullFilePath = path.join(workspace, filePath);
+      
+      // Check if file exists
+      const fileExists = await fs.access(fullFilePath).then(() => true).catch(() => false);
+      if (fileExists && !overwrite) {
+        return {
+          content: [{ 
+            type: "text", 
+            text: `File already exists at ${fullFilePath}. Use overwrite=true to replace it.` 
+          }],
+          isError: true
+        };
+      }
+      
+      // Ensure directory exists
+      await fs.mkdir(path.dirname(fullFilePath), { recursive: true });
+      
+      // Write the file
+      await fs.writeFile(fullFilePath, content);
+      
+      return {
+        content: [{ 
+          type: "text", 
+          text: `File ${fileExists ? 'updated' : 'created'} successfully at ${fullFilePath}` 
+        }]
+      };
+    } catch (error) {
+      return {
+        content: [{ 
+          type: "text", 
+          text: `Error managing file: ${error instanceof Error ? error.message : String(error)}` 
+        }],
+        isError: true
+      };
+    }
+  }
+);
+
+// Tool: Install dependencies for the workspace
+server.tool(
+  "install_dependency",
+  "Install a dependency for the Forge workspace",
+  {
+    dependency: z.string().describe("GitHub repository to install (e.g., 'OpenZeppelin/openzeppelin-contracts')"),
+    version: z.string().optional().describe("Version tag or branch to install (default: latest)")
+  },
+  async ({ dependency, version }) => {
+    const installed = await checkFoundryInstalled();
+    if (!installed) {
+      return {
+        content: [{ type: "text", text: FOUNDRY_NOT_INSTALLED_ERROR }],
+        isError: true
+      };
+    }
+
+    try {
+       const workspace = await ensureWorkspaceInitialized();
+      
+       let command = `cd ${workspace} && ${forgePath} install ${dependency} --no-commit`;
+      if (version) {
+        command += ` --tag ${version}`;
+      }
+      
+      const result = await executeCommand(command);
+      
+      return {
+        content: [{ 
+          type: "text", 
+          text: result.success 
+            ? `Dependency installed successfully:\n${result.message}` 
+            : `Failed to install dependency: ${result.message}` 
+        }],
+        isError: !result.success
+      };
+    } catch (error) {
+      return {
+        content: [{ 
+          type: "text", 
+          text: `Error installing dependency: ${error instanceof Error ? error.message : String(error)}` 
+        }],
+        isError: true
+      };
+    }
+  }
+);
+
+// Tool: List files in the workspace
+server.tool(
+  "list_files",
+  "List files in the workspace",
+  {
+    directory: z.string().optional().describe("Directory to list (e.g., 'src' or 'script'), defaults to root")
+  },
+  async ({ directory = '' }) => {
+    try {
+       const workspace = await ensureWorkspaceInitialized();
+      const dirPath = path.join(workspace, directory);
+      
+       const dirExists = await fs.access(dirPath).then(() => true).catch(() => false);
+      if (!dirExists) {
+        return {
+          content: [{ 
+            type: "text", 
+            text: `Directory '${directory}' does not exist in the workspace` 
+          }],
+          isError: true
+        };
+      }
+      
+       async function listFiles(dir, baseDir = '') {
+        const entries = await fs.readdir(dir, { withFileTypes: true });
+        let files = [];
+        
+        for (const entry of entries) {
+          const relativePath = path.join(baseDir, entry.name);
+          if (entry.isDirectory()) {
+            const subFiles = await listFiles(path.join(dir, entry.name), relativePath);
+            files = [...files, ...subFiles];
+          } else {
+            files.push(relativePath);
+          }
+        }
+        
+        return files;
+      }
+      
+      const files = await listFiles(dirPath);
+      return {
+        content: [{ 
+          type: "text", 
+          text: files.length > 0
+            ? `Files in ${directory || 'workspace'}:\n\n${files.join('\n')}`
+            : `No files found in ${directory || 'workspace'}`
+        }]
+      };
+    } catch (error) {
+      return {
+        content: [{ 
+          type: "text", 
+          text: `Error listing files: ${error instanceof Error ? error.message : String(error)}` 
+        }],
+        isError: true
+      };
+    }
+  }
+);
+
+// Tool: Read a file from the workspace
+server.tool(
+  "read_file",
+  "Read the content of a file from the workspace",
+  {
+    filePath: z.string().describe("Path to the file (e.g., 'src/MyContract.sol')")
+  },
+  async ({ filePath }) => {
+    try {
+      const workspace = await ensureWorkspaceInitialized();
+      const fullFilePath = path.join(workspace, filePath);
+      
+       const fileExists = await fs.access(fullFilePath).then(() => true).catch(() => false);
+      if (!fileExists) {
+        return {
+          content: [{ 
+            type: "text", 
+            text: `File does not exist at ${fullFilePath}` 
+          }],
+          isError: true
+        };
+      }
+      
+      const content = await fs.readFile(fullFilePath, 'utf8');
+      
+      return {
+        content: [{ 
+          type: "text", 
+          text: `Content of ${filePath}:\n\n${content}` 
+        }]
+      };
+    } catch (error) {
+      return {
+        content: [{ 
+          type: "text", 
+          text: `Error reading file: ${error instanceof Error ? error.message : String(error)}` 
+        }],
+        isError: true
+      };
+    }
+  }
+);
 
 async function startServer() {
   const foundryInstalled = await checkFoundryInstalled();
   if (!foundryInstalled) {
-    console.error("Warning: Foundry tools are not installed. Some functionality may be limited.");
+    console.error("Error: Foundry is not installed");
+    process.exit(1);
   }
 
   const transport = new StdioServerTransport();
