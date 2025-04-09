@@ -2,6 +2,8 @@
 
 A simple, lightweight and fast MCP (Model Context Protocol) server that provides Solidity development capabilities using the Foundry toolchain (Forge, Cast, and Anvil).
 
+![Foundry MCP Demo](./assets/analysis.mov)
+
 ## Overview
 
 This server connects LLM assistants to the Foundry ecosystem, enabling them to:
@@ -54,10 +56,10 @@ The server is designed to be used as an MCP tool provider for MCP Clients. When 
 
 #### Requirements
 
-- Node.js v18+
-- Foundry toolchain (Forge, Cast, Anvil)
+- [Node.js v18+](https://nodejs.org)
+- [Foundry toolchain](https://book.getfoundry.sh/) (Forge, Cast, Anvil)
   
-### Setup
+### Manual Setup
 
 1. Ensure Foundry tools (Forge, Cast, Anvil) are installed on your system:
    ```
@@ -67,10 +69,10 @@ The server is designed to be used as an MCP tool provider for MCP Clients. When 
 2. Clone and build the server.
 
     ```sh
-    bun build
+    bun i && bun build
     ```
    
-3. Update your client config:
+3. Update your client config (eg: Claude desktop):
 
 ```json
  "mcpServers": {
@@ -86,6 +88,9 @@ The server is designed to be used as an MCP tool provider for MCP Clients. When 
  }
 ```
 
+### Setup using NPM Package
+- Coming soon  
+
 #### Configuration
 
 The server supports the following environment variables:
@@ -99,13 +104,13 @@ The server maintains a persistent Forge workspace at `~/.mcp-foundry-workspace` 
 
 ## Tools
 
-### Anvil (Local EVM Node)
+### Anvil 
 
 - `anvil_start`: Start a new Anvil instance
 - `anvil_stop`: Stop a running Anvil instance
 - `anvil_status`: Check if Anvil is running and get its status
 
-### Cast (Onchain Operations)
+### Cast  
 
 - `cast_call`: Call a contract function (read-only)
 - `cast_send`: Send a transaction to a contract function
@@ -118,7 +123,7 @@ The server maintains a persistent Forge workspace at `~/.mcp-foundry-workspace` 
 - `cast_4byte`: Lookup function or event signature from the 4byte directory
 - `cast_chain`: Get information about the current chain
 
-### Forge (Development Operations)
+### Forge
 
 - `forge_script`: Run a Forge script from the workspace
 - `install_dependency`: Install a dependency for the Forge workspace
@@ -132,8 +137,42 @@ The server maintains a persistent Forge workspace at `~/.mcp-foundry-workspace` 
 ### Utilities
 
 - `convert_eth_units`: Convert between EVM units (wei, gwei, hex)
-- `generate_wallet`: Generate a new EVM wallet
 - `compute_address`: Compute the address of a contract that would be deployed
 - `contract_size`: Get the bytecode size of a deployed contract
 - `estimate_gas`: Estimate the gas cost of a transaction
 
+## Usage in Claude Desktop App 🎯
+
+Once the installation is complete, and the Claude desktop app is configured, you must completely close and re-open the Claude desktop app to see the tavily-mcp server. You should see a hammer icon in the bottom left of the app, indicating available MCP tools, you can click on the hammer icon to see more details on the available tools.
+
+![Alt text](./assets/tools.png)
+
+Now claude will have complete access to the foundry-mcp server. If you insert the below examples into the Claude desktop app, you should see the foundry-mcp server tools in action.
+
+### Examples
+
+1. **Transaction analysis**:
+```
+Can you analyze the transaction and explain what it does? 
+https://etherscan.io/tx/0xcb73ad3116f19358e2e649d4dc801b7ae0590a47b8bb2e57a8e98b6daa5fb14b
+```
+
+2. **Querying Balances**:
+```
+Query the mainnet ETH and USDT balances for the wallet 0x195F46025a6926968a1b3275822096eB12D97E70.
+```
+3.  **Sending transactions**:
+```
+Transfer 0.5 USDC to 0x195F46025a6926968a1b3275822096eB12D97E70 on Mainnet. 
+```
+
+4. **Deploying contracts**:
+```
+Deploy a mock ERC20 contract to a local mainnet forked anvil instance with blocknumber 22230903.
+```
+
+
+## Acknowledgments ✨
+
+- [Model Context Protocol](https://modelcontextprotocol.io) for the MCP specification
+- [Anthropic](https://anthropic.com) for Claude Desktop
