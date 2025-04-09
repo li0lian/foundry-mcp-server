@@ -2,7 +2,7 @@
 
 A simple, lightweight and fast MCP (Model Context Protocol) server that provides Solidity development capabilities using the Foundry toolchain (Forge, Cast, and Anvil).
 
-![Foundry MCP Demo](./assets/analysis.mov)
+![Foundry MCP Demo](./assets/analysis_gif.gif)
 
 ## Overview
 
