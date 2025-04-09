@@ -19,10 +19,10 @@ const server = new McpServer({
   instructions: `
 This server provides tools for Solidity developers using the Foundry toolkit:
 - forge: Smart contract development framework
-- cast: Ethereum RPC client and utility tool
-- anvil: Local Ethereum test node
+- cast: EVM nodes RPC client and utility tool
+- anvil: Local EVM test node
 
-You can interact with local or remote Ethereum nodes, deploy contracts, perform common operations, and analyze smart contract code.
+You can interact with local or remote EVM chains, deploy contracts, perform common operations, and analyze smart contract code.
   `
 });
 
@@ -240,7 +240,6 @@ server.tool(
     
     const result = await executeCommand(command);
     
-    // Check if we need to format the output better
     let formattedOutput = result.message;
     if (result.success) {
       // Try to detect arrays and format them better
@@ -990,35 +989,6 @@ server.tool(
   }
 );
 
-// Tool: Generate a new wallet
-server.tool(
-  "generate_wallet",
-  "Generate a new Ethereum wallet (private key and address)",
-  {},
-  async () => {
-    const installed = await checkFoundryInstalled();
-    if (!installed) {
-      return {
-        content: [{ type: "text", text: FOUNDRY_NOT_INSTALLED_ERROR }],
-        isError: true
-      };
-    }
-
-    const command = `${castPath} wallet new`;
-    const result = await executeCommand(command);
-    
-    return {
-      content: [{ 
-        type: "text", 
-        text: result.success 
-          ? `New wallet generated:\n${result.message}` 
-          : `Failed to generate wallet: ${result.message}` 
-      }],
-      isError: !result.success
-    };
-  }
-);
-
 // Tool: Calculate contract address
 server.tool(
   "compute_address",
@@ -1195,7 +1165,6 @@ server.tool(
       const workspace = await ensureWorkspaceInitialized();
       const fullFilePath = path.join(workspace, filePath);
       
-      // Check if file exists
       const fileExists = await fs.access(fullFilePath).then(() => true).catch(() => false);
       if (fileExists && !overwrite) {
         return {
@@ -1207,10 +1176,8 @@ server.tool(
         };
       }
       
-      // Ensure directory exists
       await fs.mkdir(path.dirname(fullFilePath), { recursive: true });
       
-      // Write the file
       await fs.writeFile(fullFilePath, content);
       
       return {
