@@ -88,6 +88,10 @@ The server is designed to be used as an MCP tool provider for MCP Clients. When 
  }
 ```
 
+> [!NOTE]
+> `PRIVATE_KEY` is optional 
+
+
 ### Setup using NPM Package
 - Coming soon  
 
@@ -97,6 +101,10 @@ The server supports the following environment variables:
 
 - `RPC_URL`: Default RPC URL to use when none is specified (optional)
 - `PRIVATE_KEY`: Private key to use for transactions (optional)
+
+> [!CAUTION]
+> Do not add keys with mainnet funds. Even though the code uses it safely, LLMs can hallicunate and send malicious transactions. 
+> Use it only for testing/development purposes. DO NOT trust the LLM!!
 
 ### Workspace
 
@@ -176,3 +184,7 @@ Deploy a mock ERC20 contract to a local mainnet forked anvil instance with block
 
 - [Model Context Protocol](https://modelcontextprotocol.io) for the MCP specification
 - [Anthropic](https://anthropic.com) for Claude Desktop
+
+## Disclaimer
+
+_The software is being provided as is. No guarantee, representation or warranty is being made, express or implied, as to the safety or correctness of the software. They have not been audited and as such there can be no assurance they will work as intended, and users may experience delays, failures, errors, omissions, loss of transmitted information or loss of funds. The creators are not liable for any of the foregoing. Users should proceed with caution and use at their own risk._
