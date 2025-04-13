@@ -174,9 +174,9 @@ Query the mainnet ETH and USDT balances for the wallet 0x195F46025a6926968a1b327
 Transfer 0.5 USDC to 0x195F46025a6926968a1b3275822096eB12D97E70 on Mainnet. 
 ```
 
-4. **Deploying contracts**:
+4. **Deploying contracts/Running scripts**:
 ```
-Deploy a mock ERC20 contract to a local mainnet forked anvil instance with blocknumber 22230903.
+Deploy a mock ERC20 contract to a local anvil instance and name it "Fire Coin".
 ```
 
 
