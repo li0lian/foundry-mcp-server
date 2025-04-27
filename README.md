@@ -69,8 +69,7 @@ The server is designed to be used as an MCP tool provider for MCP Clients. When 
 2. Clone and build the server.
 
     ```sh
-    bun i && bun build
-    ```
+    bun i && bun build ./src/index.ts --outdir ./dist --target node
    
 3. Update your client config (eg: Claude desktop):
 
