@@ -70,6 +70,7 @@ The server is designed to be used as an MCP tool provider for MCP Clients. When 
 
     ```sh
     bun i && bun build ./src/index.ts --outdir ./dist --target node
+    ```
    
 3. Update your client config (eg: Claude desktop):
 
@@ -107,7 +108,7 @@ The server supports the following environment variables:
 
 ### Workspace
 
-The server maintains a persistent Forge workspace at `~/.mcp-foundry-workspace` for all Solidity files, scripts, and dependencies.
+The server maintains a persistent Forge workspace at `~/foundry-mcp-server/workspace` for all Solidity files, scripts, and dependencies.
 
 ## Tools
 
@@ -134,6 +135,9 @@ The server maintains a persistent Forge workspace at `~/.mcp-foundry-workspace` 
 
 - `forge_script`: Run a Forge script from the workspace
 - `install_dependency`: Install a dependency for the Forge workspace
+- `deploy_erc20`: Deploy an ERC20 token using DeployTestERC20.s.sol script
+- `deploy_erc721`: Deploy an ERC721 token (NFT) using DeployERC721.s.sol script
+- `deploy_erc1155`: Deploy an ERC1155 multi-token using DeployERC1155.s.sol script
 
 ### File Management
 
@@ -173,11 +177,85 @@ Query the mainnet ETH and USDT balances for the wallet 0x195F46025a6926968a1b327
 Transfer 0.5 USDC to 0x195F46025a6926968a1b3275822096eB12D97E70 on Mainnet. 
 ```
 
-4. **Deploying contracts/Running scripts**:
+4. **Deploying contracts**:
 ```
-Deploy a mock ERC20 contract to a local anvil instance and name it "Fire Coin".
+Deploy a contract using one of the existing deployment scripts in the workspace.
 ```
 
+### Using Existing Deployment Scripts
+
+The workspace comes with pre-configured deployment scripts for common token standards that should be used for deployment instead of creating new ones:
+
+1. **Deploy ERC20 Token**:
+```
+Start a local Anvil instance and deploy an ERC20 token using the deploy_erc20 tool:
+deploy_erc20 name="My Token" symbol="MTK" initialSupply="1000000" rpcUrl="http://localhost:8545"
+```
+
+2. **Deploy ERC721 Token (NFT)**:
+```
+Deploy an ERC721 NFT collection using the deploy_erc721 tool:
+deploy_erc721 name="My NFT Collection" symbol="MNFT" tokenId="42" rpcUrl="http://localhost:8545"
+```
+
+3. **Deploy ERC1155 Token (Multi-token)**:
+```
+Deploy an ERC1155 multi-token contract using the deploy_erc1155 tool:
+deploy_erc1155 name="My Multi Token" symbol="MMT" tokenIds="100,200,300" quantities="50,25,10" baseUri="https://myapi.com/tokens/" rpcUrl="http://localhost:8545"
+```
+
+These tools provide standardized deployments by automatically using the corresponding deployment scripts:
+
+- **deploy_erc20**: Uses DeployTestERC20.s.sol script to deploy an ERC20 token (required parameters: name, symbol; optional parameter: initialSupply)
+- **deploy_erc721**: Uses DeployERC721.s.sol script to deploy an NFT collection (required parameters: name, symbol; optional parameter: tokenId)
+- **deploy_erc1155**: Uses DeployERC1155.s.sol script to deploy a multi-token contract (required parameters: name, symbol; optional parameters: tokenIds, quantities, baseUri)
+
+Most parameters have defaults from the scripts and are optional, but name and symbol are required to ensure proper token identification.
+
+### Simplified Approach: Direct Use of forge_script
+
+For more flexibility, you can also use the `forge_script` tool directly to run the deployment scripts with environment variables:
+
+#### 1. ERC20 Token Deployment
+
+```bash
+# Using default values
+forge_script scriptPath="script/DeployTestERC20.s.sol" rpcUrl="http://localhost:8545" broadcast=true
+
+# Using custom values via environment variables
+TOKEN_NAME="My Custom Token" TOKEN_SYMBOL="MCT" TOKEN_SUPPLY="5000000" \
+forge_script scriptPath="script/DeployTestERC20.s.sol" rpcUrl="http://localhost:8545" broadcast=true
+```
+
+#### 2. ERC721 Token Deployment
+
+```bash
+# Using default values
+forge_script scriptPath="script/DeployERC721.s.sol" rpcUrl="http://localhost:8545" broadcast=true
+
+# Using custom values via environment variables
+NFT_NAME="My NFT Collection" NFT_SYMBOL="MNFT" NFT_TOKEN_ID="42" \
+forge_script scriptPath="script/DeployERC721.s.sol" rpcUrl="http://localhost:8545" broadcast=true
+```
+
+#### 3. ERC1155 Token Deployment
+
+```bash
+# Using default values
+forge_script scriptPath="script/DeployERC1155.s.sol" rpcUrl="http://localhost:8545" broadcast=true
+
+# Using custom values via environment variables
+ERC1155_NAME="My Multi Token" ERC1155_SYMBOL="MMT" ERC1155_TOKEN_IDS="100,200,300" ERC1155_QUANTITIES="50,25,10" ERC1155_BASE_URI="https://my-api.com/tokens/" \
+forge_script scriptPath="script/DeployERC1155.s.sol" rpcUrl="http://localhost:8545" broadcast=true
+```
+
+The deployment scripts have been updated to read parameters from environment variables with sensible defaults, making them easy to use without modification.
+
+You can also use the `forge_script` tool directly to run these scripts with more configuration options:
+
+```
+forge_script scriptPath="script/DeployTestERC20.s.sol" rpcUrl="http://localhost:8545"
+```
 
 ## Acknowledgments ✨
 
@@ -187,3 +265,4 @@ Deploy a mock ERC20 contract to a local anvil instance and name it "Fire Coin".
 ## Disclaimer
 
 _The software is being provided as is. No guarantee, representation or warranty is being made, express or implied, as to the safety or correctness of the software. They have not been audited and as such there can be no assurance they will work as intended, and users may experience delays, failures, errors, omissions, loss of transmitted information or loss of funds. The creators are not liable for any of the foregoing. Users should proceed with caution and use at their own risk._
+
